@@ -1,0 +1,63 @@
+# ldap-gateway-proxy
+#
+# One listen port for LDAPS, and one for LDAP StartTLS. The client connects
+# with a hostname. That name (TLS SNI) picks the OpenLDAP server. The proxy
+# does not decrypt the directory traffic after the handshake starts, and it
+# does not need the backend certificate's private key.
+#
+# A missing file is replaced with this one on startup. Edit the copy in
+# your mounted /config directory. This copy inside the image is only a seed.
+
+listen:
+  - bind: 0.0.0.0:636
+    mode: ldaps
+  - bind: 0.0.0.0:389
+    mode: starttls
+
+log:
+  level: info          # debug | info | warn | error
+  format: text         # text | json
+
+limits:
+  maxConnections: 2000
+
+timeouts:
+  connect: 5s          # TCP connect to the backend
+  handshake: 10s       # waiting for ClientHello / StartTLS
+  idle: 0s             # 0 disables the idle timer
+
+# A raw IP has no hostname. Leave these on to refuse it.
+requireSni: true
+blockIpSni: true
+
+# No matching host: "reject", or a host:port used for every other name.
+unmatched: reject
+
+health:
+  enabled: true
+  bind: 127.0.0.1:8081
+
+# Named backends. A route can point at a name, or at host:port directly.
+# mode is how the backend expects the connection: ldaps (TLS immediately)
+# or starttls (an LDAP StartTLS exchange, then TLS).
+servers:
+  # directory: 10.0.0.90:636
+  # replicas:
+  #   addresses:
+  #     - 10.0.0.91:636
+  #     - 10.0.0.92:636
+  #   strategy: round-robin    # first | round-robin | random | least-connections
+  #   mode: ldaps
+
+# First match wins. Patterns: exact, *.example.com (one label), **.example.com, *.
+# $1, $2, ${sni} are substituted into address backends.
+routes:
+  # - name: main
+  #   host: ldap.example.com
+  #   backend: "10.0.0.90:636"
+  #   mode: ldaps
+  #
+  # - name: tenant
+  #   host: "*.ldap.example.com"
+  #   backend: "$1.ldap.internal:636"
+  #   mode: ldaps

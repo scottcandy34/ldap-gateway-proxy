@@ -1,0 +1,9 @@
+services:
+  ldap-gateway:
+    image: ghcr.io/scottcandy34/ldap-gateway-proxy:v0.1.0
+    restart: unless-stopped
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - ./config:/config
