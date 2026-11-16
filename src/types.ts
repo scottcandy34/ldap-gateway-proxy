@@ -2,7 +2,7 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export type LogFormat = "text" | "json";
 export type Strategy = "first" | "round-robin" | "random" | "least-connections";
 export type ListenMode = "ldaps" | "starttls";
-export type BackendMode = "ldaps" | "starttls";
+export type BackendMode = "ldaps" | "starttls" | "plain";
 export type ScopeName = "base" | "one" | "sub";
 
 export type Address = {

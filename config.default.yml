@@ -38,8 +38,8 @@ health:
   bind: 127.0.0.1:8081
 
 # Named backends. A route can point at a name, or at host:port directly.
-# mode is how the backend expects the connection: ldaps (TLS immediately)
-# or starttls (an LDAP StartTLS exchange, then TLS).
+# mode is how the backend expects the connection: plain (no TLS; this proxy
+# holds the certificate), ldaps (TLS immediately), or starttls.
 servers: {}
 
 # A route with `binds` terminates TLS and enforces the firewall below.

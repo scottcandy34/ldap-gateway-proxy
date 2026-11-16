@@ -42,6 +42,7 @@ export function parseConfig(raw: unknown, configPath: string): Config {
     servers: serversOf(doc.servers),
     routes: routesOf(doc.routes, configPath),
   };
+  forcePlainIntercept(config);
   requireInterceptCerts(config);
   return config;
 }
@@ -129,14 +130,15 @@ function routesOf(value: unknown, configPath: string): Route[] {
     if (hosts.length === 0) throw new Error(`${pathName}.host is required`);
     const backend = doc.backend;
     const binds = bindsOf(doc.binds, `${pathName}.binds`);
+    const backendMode = doc.mode === undefined ? "inherit" : backendModeOf(doc.mode, `${pathName}.mode`);
     const route: Route = {
       name: typeof doc.name === "string" && doc.name ? doc.name : `route-${index + 1}`,
       hosts,
       backends: [],
       serverNames: [],
       strategy: strategyOf(typeof doc.strategy === "string" ? doc.strategy : "first", pathName),
-      backendMode: doc.mode === undefined ? "inherit" : backendModeOf(doc.mode, `${pathName}.mode`),
-      intercept: bool(doc.intercept, binds.length > 0),
+      backendMode,
+      intercept: bool(doc.intercept, binds.length > 0 || backendMode === "plain"),
       tls: tlsOf(doc.tls, `${pathName}.tls`, configPath),
       binds,
     };
@@ -166,8 +168,8 @@ function modeOf(value: unknown, pathName: string): ListenMode {
 }
 
 function backendModeOf(value: unknown, pathName: string): BackendMode {
-  if (value === "ldaps" || value === "starttls") return value;
-  throw new Error(`${pathName} must be ldaps or starttls`);
+  if (value === "ldaps" || value === "starttls" || value === "plain") return value;
+  throw new Error(`${pathName} must be ldaps, starttls, or plain`);
 }
 
 function firewallOf(value: unknown): Config["firewall"] {
@@ -234,6 +236,19 @@ function queriesOf(value: unknown, pathName: string): AllowedQuery[] {
     }
     return compileQuery(doc.base, scopeOf(doc.scope), doc.filter);
   });
+}
+
+function forcePlainIntercept(config: Config): void {
+  for (const route of config.routes) {
+    if (effectiveBackendMode(route, config.servers) === "plain") route.intercept = true;
+  }
+}
+
+function effectiveBackendMode(route: Route, servers: ServerDef[]): BackendMode | "inherit" {
+  if (route.backendMode !== "inherit") return route.backendMode;
+  const name = route.serverNames[0];
+  if (!name) return "inherit";
+  return servers.find((server) => server.name === name)?.backendMode ?? "inherit";
 }
 
 function requireInterceptCerts(config: Config): void {

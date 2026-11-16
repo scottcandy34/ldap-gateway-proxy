@@ -195,6 +195,12 @@ class Session {
     for (const target of this.router.order(this.match)) {
       try {
         const raw = await connectTcp(target, this.config.timeouts.connectMs);
+        if (mode === "plain") {
+          this.router.acquire(target);
+          raw.once("close", () => this.router.release(target));
+          this.backend = new Directory(raw, this.config.firewall.maxBackendBytes);
+          return this.backend;
+        }
         if (mode === "starttls") await openStartTls(raw);
         const secure = await openTls(raw, this.match.captures.sni, this.match.route.tls.ca, this.match.route.tls.rejectUnauthorized);
         this.router.acquire(target);
@@ -218,7 +224,7 @@ class Directory {
   private readonly reader: MessageReader;
 
   constructor(
-    private readonly socket: TLSSocket,
+    private readonly socket: Socket,
     maxBytes: number,
   ) {
     this.reader = new MessageReader(socket, maxBytes);

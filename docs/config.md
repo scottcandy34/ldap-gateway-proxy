@@ -49,10 +49,10 @@ routes:
     host: ldap.example.com          # string or list
     backend: "10.0.0.90:636"        # host:port, a list, or a servers: name
     strategy: first                 # first | round-robin | random | least-connections
-    mode: ldaps                     # ldaps | starttls; omit to match the listener
+    mode: plain                     # plain | ldaps | starttls; omit to match the listener
 ```
 
-`backend` cannot mix `host:port` values with server names. Several addresses are tried in `strategy` order. A failed TCP connect moves to the next address.
+`plain` is plaintext LDAP. The proxy terminates the client TLS and does not ask the directory for StartTLS or a certificate. `ldaps` and `starttls` are the encrypted backends. A `plain` route always terminates TLS, so it needs `tls.cert` and `tls.key` (the certificate clients see). `ca` and `rejectUnauthorized` are only used for `ldaps` and `starttls` backends.
 
 ## servers
 

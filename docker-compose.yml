@@ -1,6 +1,6 @@
 services:
   ldap-gateway:
-    image: ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.0
+    image: ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.1
     restart: unless-stopped
     ports:
       - "389:389"
