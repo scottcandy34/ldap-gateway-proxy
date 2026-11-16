@@ -137,3 +137,5 @@ Bind DNs are compared case-insensitively, ignoring spaces around `=` and `,`. Fi
 
 The certificate in `tls.cert` is the one the client validates. It has to match the hostname the client used. `tls.ca` is only for checking the OpenLDAP server.
 
+[npm-cert-share](https://github.com/scottcandy34/npm-cert-share) writes one folder per domain from Nginx Proxy Manager. Mount that directory at `/certs` and set `cert: /certs/ldap.example.com/fullchain.pem` and `key: /certs/ldap.example.com/privkey.pem`. A wildcard name is the folder `_.example.com`. This is only for a route that terminates TLS (`mode: plain`, `binds`, or `intercept: true`). A splice route never reads these files. The process reads them at startup, so recreate the container after a renewal. pg-gateway-proxy is different: it always terminates, and its certificate list lives under a top-level `tls` block rather than on the route.
+

@@ -11,14 +11,14 @@ Port 389 is StartTLS. The proxy answers the StartTLS request, reads the same SNI
 | | |
 |---|---|
 | Image | `ghcr.io/scottcandy34/ldap-gateway-proxy` |
-| This release | `v0.2.1` |
-| Also tagged | `0.2.1`, `v0.2`, `0.2`, `latest` |
+| This release | `v0.2.2` |
+| Also tagged | `0.2.2`, `v0.2`, `0.2`, `latest` |
 
 ```bash
-docker pull ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.1
+docker pull ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.2
 ```
 
-`latest` moves when a newer version is published. `v0.2.1` does not. Pin the version.
+`latest` moves when a newer version is published. `v0.2.2` does not. Pin the version.
 
 The image version is the `version` in [package.json](package.json). Major stays `0` until a breaking change. Bump it before a change you want published:
 
@@ -36,7 +36,7 @@ mkdir -p config
 docker compose up -d
 ```
 
-[docker-compose.yml](docker-compose.yml) already points at `ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.1`. The first start writes `config/config.yml` if the file is missing. Edit it and recreate the container. An empty `./config` mount is enough. Pulling a new image does not overwrite a config you have edited.
+[docker-compose.yml](docker-compose.yml) already points at `ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.2`. The first start writes `config/config.yml` if the file is missing. Edit it and recreate the container. An empty `./config` mount is enough. Pulling a new image does not overwrite a config you have edited.
 
 Or without compose:
 
@@ -44,7 +44,7 @@ Or without compose:
 docker run -d --name ldap-gateway \
   -p 389:389 -p 636:636 \
   -v "$PWD/config:/config" \
-  ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.1
+  ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.2
 ```
 
 Health checks inside the container use `http://127.0.0.1:8081/health`. That port is not published.
@@ -87,6 +87,41 @@ If you omit `mode`, the backend is spoken to the same way the client connected. 
 `host` is an exact name, `*.example.com` (one label), `**.example.com`, or `*`. `$1` and `${sni}` are substituted into the backend address. First match wins.
 
 Quoted `host:port` values are required. YAML will not accept a bare `10.0.0.90:636`.
+
+## Certificates
+
+This is not how [pg-gateway-proxy](https://github.com/scottcandy34/pg-gateway-proxy) works. Postgres always terminates TLS, can generate a self-signed certificate, and keeps a list of extra certificates by SNI. LDAP does one of two things:
+
+- `mode: ldaps` or `mode: starttls`, with no `binds` and no `intercept: true`, splices the bytes. This proxy loads no certificate. The client sees the directory's certificate.
+- `mode: plain`, a `binds` map, or `intercept: true` terminates TLS. The proxy presents `tls.cert` and `tls.key`. There is no generated certificate. The process will not start without both files. `tls.ca` is only for checking the directory, and only when `mode` is `ldaps` or `starttls`.
+
+[npm-cert-share](https://github.com/scottcandy34/npm-cert-share) is one way to get those files. It copies Nginx Proxy Manager certificates into one folder per domain:
+
+```text
+/certs/ldap.example.com/fullchain.pem
+/certs/ldap.example.com/privkey.pem
+```
+
+A wildcard `*.example.com` is the folder `_.example.com`. Mount the output read-only:
+
+```yaml
+volumes:
+  - ./config:/config
+  - /path/to/npm-cert-share/certs:/certs:ro
+```
+
+```yaml
+routes:
+  - name: directory
+    host: ldap.example.com
+    backend: "10.0.0.90:389"
+    mode: plain
+    tls:
+      cert: /certs/ldap.example.com/fullchain.pem
+      key: /certs/ldap.example.com/privkey.pem
+```
+
+The files are read when the process starts. After npm-cert-share writes a renewal, recreate this container. A splice route does not use them.
 
 Every route key is documented in [docs/config.md](docs/config.md).
 

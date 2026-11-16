@@ -1,9 +1,11 @@
 services:
   ldap-gateway:
-    image: ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.1
+    image: ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.2
     restart: unless-stopped
     ports:
       - "389:389"
       - "636:636"
     volumes:
       - ./config:/config
+      # Optional. The output of npm-cert-share, used when a route terminates TLS.
+      # - /path/to/npm-cert-share/certs:/certs:ro

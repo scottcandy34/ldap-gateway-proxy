@@ -45,6 +45,10 @@ servers: {}
 # A route with `binds` terminates TLS and enforces the firewall below.
 # Leave binds off and the route is a plain SNI splice: the certificate
 # stays on the OpenLDAP server.
+# A terminating route (mode: plain, binds, or intercept: true) needs
+# tls.cert and tls.key. npm-cert-share writes those as
+# /certs/<domain>/fullchain.pem and privkey.pem.
+# https://github.com/scottcandy34/npm-cert-share
 firewall:
   allowAllBinds: false
   maxIncomingBytes: 8388608
