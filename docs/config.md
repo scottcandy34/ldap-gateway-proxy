@@ -90,6 +90,50 @@ health:
 
 Durations are `500ms`, `5s`, or `1m`. `GET /health` returns `{"ok":true,"connections":N,"routes":N}`.
 
-## What the proxy does not do
+## Firewall, cache, and bind maps
 
-It does not bind as a user, and it does not read the LDAP operations after the handshake. OpenLDAP still does authentication, access control, and certificates. The proxy only chooses the server from the hostname.
+These are the parts borrowed from [kanidm/ldap-proxy](https://github.com/kanidm/ldap-proxy). They only run on a route that terminates TLS. A route terminates TLS when it has a `binds` map, or when `intercept: true` is set. Other routes stay a byte-for-byte SNI splice and do not see binds or searches.
+
+```yaml
+firewall:
+  allowAllBinds: false       # false: only DNs listed in binds may bind
+  maxIncomingBytes: 8388608  # largest client LDAP message
+  maxBackendBytes: 8388608   # largest backend LDAP message
+  cache:
+    maxBytes: 134217728      # 0 turns the cache off
+    ttl: 1800s
+
+routes:
+  - name: main
+    host: ldap.example.com
+    backend: "10.0.0.90:636"
+    mode: ldaps
+    tls:
+      cert: /config/certs/ldap.example.com.pem   # presented to the client
+      key: /config/certs/ldap.example.com.key
+      ca: /config/certs/backend-ca.pem           # optional, verifies the backend
+      rejectUnauthorized: true
+    binds:
+      "":                                        # anonymous
+        mapToDn: "uid=reader,dc=example,dc=com"
+        mapToSecret: "replace-me"
+        allowedQueries:
+          - ["dc=example,dc=com", "subtree", "(objectClass=*)"]
+      "cn=admin,dc=example,dc=com": {}           # every search is allowed
+```
+
+| Behavior | What happens |
+|---|---|
+| Bind DN not listed, `allowAllBinds: false` | operations error `unable to bind`. The backend is not contacted. |
+| `allowedQueries` omitted | that DN may run any search |
+| `allowedQueries` set | the base DN, scope (`base`, `one`, `subtree`), and filter must match exactly. Anything else returns a successful search with no entries. |
+| `mapToDn` / `mapToSecret` | the backend bind uses those credentials. The client still sees its own DN, including from Who Am I. |
+| Search cache | successful searches are remembered per bind DN, base, scope, and filter. A second identical search does not hit OpenLDAP. Controls are never cached. |
+| Who Am I | answered locally (`1.3.6.1.4.1.4203.1.11.3`). |
+| Add, modify, delete, compare, rename | forwarded after a successful bind. They are not filtered. |
+| SASL binds | rejected. Simple binds only. |
+
+Bind DNs are compared case-insensitively, ignoring spaces around `=` and `,`. Filters are compared in a canonical form, so `(objectClass=*)` and `(objectclass=*)` are the same rule.
+
+The certificate in `tls.cert` is the one the client validates. It has to match the hostname the client used. `tls.ca` is only for checking the OpenLDAP server.
+

@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 import { parseAddress } from "./address.js";
+import { compileQuery } from "./firewall.js";
+import { scopeOf } from "./ldap-ops.js";
 import { isBackendAddress, strategyOf } from "./router.js";
-import type { BackendMode, Config, ListenMode, Listener, LogFormat, LogLevel, Route, ServerDef } from "./types.js";
+import type { AllowedQuery, BackendMode, BindRule, Config, ListenMode, Listener, LogFormat, LogLevel, Route, ServerDef, TlsMaterial } from "./types.js";
 
 const DEFAULT_FILE = "config.default.yml";
 
@@ -23,9 +26,9 @@ export async function loadOrCreate(configPath: string): Promise<{ config: Config
 export function parseConfig(raw: unknown, configPath: string): Config {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("config must be a mapping");
   const doc = raw as Record<string, unknown>;
-  assertKeys(doc, ["listen", "log", "limits", "timeouts", "requireSni", "blockIpSni", "unmatched", "health", "servers", "routes"], "config");
-  const listeners = listenersOf(doc.listen);
-  return {
+  assertKeys(doc, ["listen", "log", "limits", "timeouts", "requireSni", "blockIpSni", "unmatched", "health", "firewall", "servers", "routes"], "config");
+  const listeners = listenersOf(doc.listen, configPath);
+  const config: Config = {
     configPath,
     listeners,
     log: logOf(doc.log),
@@ -35,16 +38,19 @@ export function parseConfig(raw: unknown, configPath: string): Config {
     blockIpSni: bool(doc.blockIpSni, true),
     unmatched: unmatchedOf(doc.unmatched),
     health: healthOf(doc.health),
+    firewall: firewallOf(doc.firewall),
     servers: serversOf(doc.servers),
-    routes: routesOf(doc.routes),
+    routes: routesOf(doc.routes, configPath),
   };
+  requireInterceptCerts(config);
+  return config;
 }
 
-function listenersOf(value: unknown): Listener[] {
+function listenersOf(value: unknown, configPath: string): Listener[] {
   if (value === undefined) {
     return [
-      { host: "0.0.0.0", port: 636, mode: "ldaps" },
-      { host: "0.0.0.0", port: 389, mode: "starttls" },
+      { host: "0.0.0.0", port: 636, mode: "ldaps", tls: emptyTls() },
+      { host: "0.0.0.0", port: 389, mode: "starttls", tls: emptyTls() },
     ];
   }
   if (!Array.isArray(value) || value.length === 0) throw new Error("listen must be a non-empty list");
@@ -52,10 +58,10 @@ function listenersOf(value: unknown): Listener[] {
     const pathName = `listen[${index}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${pathName} must be a mapping`);
     const doc = item as Record<string, unknown>;
-    assertKeys(doc, ["bind", "mode"], pathName);
+    assertKeys(doc, ["bind", "mode", "tls"], pathName);
     const bind = typeof doc.bind === "string" ? parseAddress(doc.bind, `${pathName}.bind`) : undefined;
     if (!bind) throw new Error(`${pathName}.bind is required`);
-    return { host: bind.host, port: bind.port, mode: modeOf(doc.mode, `${pathName}.mode`) };
+    return { host: bind.host, port: bind.port, mode: modeOf(doc.mode, `${pathName}.mode`), tls: tlsOf(doc.tls, `${pathName}.tls`, configPath) };
   });
 }
 
@@ -111,17 +117,18 @@ function serversOf(value: unknown): ServerDef[] {
   });
 }
 
-function routesOf(value: unknown): Route[] {
+function routesOf(value: unknown, configPath: string): Route[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("routes must be a list");
   return value.map((item, index) => {
     const pathName = `routes[${index}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`${pathName} must be a mapping`);
     const doc = item as Record<string, unknown>;
-    assertKeys(doc, ["name", "host", "backend", "strategy", "mode"], pathName);
+    assertKeys(doc, ["name", "host", "backend", "strategy", "mode", "intercept", "tls", "binds"], pathName);
     const hosts = stringOrList(doc.host, `${pathName}.host`);
     if (hosts.length === 0) throw new Error(`${pathName}.host is required`);
     const backend = doc.backend;
+    const binds = bindsOf(doc.binds, `${pathName}.binds`);
     const route: Route = {
       name: typeof doc.name === "string" && doc.name ? doc.name : `route-${index + 1}`,
       hosts,
@@ -129,6 +136,9 @@ function routesOf(value: unknown): Route[] {
       serverNames: [],
       strategy: strategyOf(typeof doc.strategy === "string" ? doc.strategy : "first", pathName),
       backendMode: doc.mode === undefined ? "inherit" : backendModeOf(doc.mode, `${pathName}.mode`),
+      intercept: bool(doc.intercept, binds.length > 0),
+      tls: tlsOf(doc.tls, `${pathName}.tls`, configPath),
+      binds,
     };
     const items = stringOrList(backend, `${pathName}.backend`);
     if (items.length === 0) throw new Error(`${pathName}.backend is required`);
@@ -158,6 +168,108 @@ function modeOf(value: unknown, pathName: string): ListenMode {
 function backendModeOf(value: unknown, pathName: string): BackendMode {
   if (value === "ldaps" || value === "starttls") return value;
   throw new Error(`${pathName} must be ldaps or starttls`);
+}
+
+function firewallOf(value: unknown): Config["firewall"] {
+  const doc = section(value, "firewall");
+  assertKeys(doc, ["allowAllBinds", "maxIncomingBytes", "maxBackendBytes", "cache"], "firewall");
+  const cache = section(doc.cache, "firewall.cache");
+  assertKeys(cache, ["maxBytes", "ttl"], "firewall.cache");
+  return {
+    allowAllBinds: bool(doc.allowAllBinds, false),
+    maxIncomingBytes: numberOr(doc.maxIncomingBytes, 8 * 1024 * 1024, "firewall.maxIncomingBytes"),
+    maxBackendBytes: numberOr(doc.maxBackendBytes, 8 * 1024 * 1024, "firewall.maxBackendBytes"),
+    cache: {
+      maxBytes: numberOr(cache.maxBytes, 128 * 1024 * 1024, "firewall.cache.maxBytes"),
+      ttlMs: duration(cache.ttl ?? "1800s", "firewall.cache.ttl"),
+    },
+  };
+}
+
+function tlsOf(value: unknown, pathName: string, configPath: string): TlsMaterial {
+  if (value === undefined) return emptyTls();
+  const doc = section(value, pathName);
+  assertKeys(doc, ["cert", "key", "ca", "rejectUnauthorized"], pathName);
+  return {
+    cert: pem(doc.cert, `${pathName}.cert`, configPath),
+    key: pem(doc.key, `${pathName}.key`, configPath),
+    ca: pem(doc.ca, `${pathName}.ca`, configPath),
+    rejectUnauthorized: bool(doc.rejectUnauthorized, true),
+  };
+}
+
+function bindsOf(value: unknown, pathName: string): BindRule[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${pathName} must be a mapping of bind DNs`);
+  return Object.entries(value as Record<string, unknown>).map(([dn, body]) => {
+    const itemPath = `${pathName}.${dn || "anonymous"}`;
+    if (body === undefined || body === null) return { dn, allowedQueries: null };
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error(`${itemPath} must be a mapping`);
+    const doc = body as Record<string, unknown>;
+    assertKeys(doc, ["allowedQueries", "mapToDn", "mapToSecret"], itemPath);
+    return {
+      dn,
+      allowedQueries: doc.allowedQueries === undefined ? null : queriesOf(doc.allowedQueries, `${itemPath}.allowedQueries`),
+      mapToDn: optionalString(doc.mapToDn, `${itemPath}.mapToDn`),
+      mapToSecret: optionalString(doc.mapToSecret, `${itemPath}.mapToSecret`),
+    };
+  });
+}
+
+function queriesOf(value: unknown, pathName: string): AllowedQuery[] {
+  if (!Array.isArray(value)) throw new Error(`${pathName} must be a list`);
+  return value.map((item, index) => {
+    const itemPath = `${pathName}[${index}]`;
+    if (Array.isArray(item)) {
+      if (item.length !== 3 || item.some((part) => typeof part !== "string")) {
+        throw new Error(`${itemPath} must be [base, scope, filter]`);
+      }
+      return compileQuery(item[0] as string, scopeOf(item[1] as string), item[2] as string);
+    }
+    if (!item || typeof item !== "object") throw new Error(`${itemPath} must be [base, scope, filter]`);
+    const doc = item as Record<string, unknown>;
+    assertKeys(doc, ["base", "scope", "filter"], itemPath);
+    if (typeof doc.base !== "string" || typeof doc.scope !== "string" || typeof doc.filter !== "string") {
+      throw new Error(`${itemPath} needs base, scope, and filter`);
+    }
+    return compileQuery(doc.base, scopeOf(doc.scope), doc.filter);
+  });
+}
+
+function requireInterceptCerts(config: Config): void {
+  for (const route of config.routes) {
+    if (!route.intercept) continue;
+    if (route.tls.cert && route.tls.key) continue;
+    if (config.listeners.every((listener) => listener.tls.cert && listener.tls.key)) continue;
+    throw new Error(`route ${route.name} intercepts LDAP and needs tls.cert and tls.key`);
+  }
+}
+
+function emptyTls(): TlsMaterial {
+  return { rejectUnauthorized: true };
+}
+
+function pem(value: unknown, pathName: string, configPath: string): string | undefined {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${pathName} must be a file path`);
+  const resolved = path.resolve(path.dirname(configPath), value);
+  try {
+    return readFileSync(resolved, "utf8");
+  } catch {
+    throw new Error(`${pathName} could not be read (${resolved})`);
+  }
+}
+
+function optionalString(value: unknown, pathName: string): string | undefined {
+  if (value === undefined) return;
+  if (typeof value !== "string") throw new Error(`${pathName} must be a string`);
+  return value;
+}
+
+function numberOr(value: unknown, fallback: number, pathName: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new Error(`${pathName} must be a non-negative integer`);
+  return value;
 }
 
 function section(value: unknown, pathName: string): Record<string, unknown> {

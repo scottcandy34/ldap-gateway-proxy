@@ -1,5 +1,6 @@
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer, connect as netConnect, type Server, type Socket } from "node:net";
+import { serveIntercept } from "./intercept.js";
 import { extendedResult, inspectLdap, startTlsRequest } from "./ldap.js";
 import { createLogger, type Logger } from "./log.js";
 import { Router, type Match, type Target } from "./router.js";
@@ -66,6 +67,10 @@ export async function startProxy(config: Config, logger?: Logger): Promise<Runni
       socket.destroy();
       return;
     }
+    if (match.route.intercept) {
+      await serveIntercept({ socket, hello: hello.bytes, match, listener, config, log, router });
+      return;
+    }
     const mode = resolveMode(match, listener);
     const backend = await dial(router, match, config, log);
     if (mode === "starttls") await completeStartTls(backend.socket);
@@ -94,6 +99,10 @@ export async function startProxy(config: Config, logger?: Logger): Promise<Runni
     if (!match || match.targets.length === 0) {
       log.warn("rejected", { sni: hello.sni ?? "", error: `no LDAP route for ${hello.sni || "this connection"}` });
       socket.destroy();
+      return;
+    }
+    if (match.route.intercept) {
+      await serveIntercept({ socket, hello: hello.bytes, match, listener, config, log, router });
       return;
     }
     const mode = resolveMode(match, listener);
@@ -149,6 +158,7 @@ export async function startProxy(config: Config, logger?: Logger): Promise<Runni
       name: route.name,
       host: route.hosts.join(","),
       backend: route.backends.length > 0 ? route.backends.join(",") : route.serverNames.join(","),
+      intercept: route.intercept,
     });
   }
 

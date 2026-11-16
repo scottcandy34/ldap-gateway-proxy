@@ -40,24 +40,32 @@ health:
 # Named backends. A route can point at a name, or at host:port directly.
 # mode is how the backend expects the connection: ldaps (TLS immediately)
 # or starttls (an LDAP StartTLS exchange, then TLS).
-servers:
-  # directory: 10.0.0.90:636
-  # replicas:
-  #   addresses:
-  #     - 10.0.0.91:636
-  #     - 10.0.0.92:636
-  #   strategy: round-robin    # first | round-robin | random | least-connections
-  #   mode: ldaps
+servers: {}
 
-# First match wins. Patterns: exact, *.example.com (one label), **.example.com, *.
-# $1, $2, ${sni} are substituted into address backends.
-routes:
-  # - name: main
-  #   host: ldap.example.com
-  #   backend: "10.0.0.90:636"
-  #   mode: ldaps
-  #
-  # - name: tenant
-  #   host: "*.ldap.example.com"
-  #   backend: "$1.ldap.internal:636"
-  #   mode: ldaps
+# A route with `binds` terminates TLS and enforces the firewall below.
+# Leave binds off and the route is a plain SNI splice: the certificate
+# stays on the OpenLDAP server.
+firewall:
+  allowAllBinds: false
+  maxIncomingBytes: 8388608
+  maxBackendBytes: 8388608
+  cache:
+    maxBytes: 134217728   # 128 MiB. 0 disables the search cache
+    ttl: 1800s
+
+# routes:
+#   - name: main
+#     host: ldap.example.com
+#     backend: "10.0.0.90:636"
+#     mode: ldaps
+#     tls:
+#       cert: /config/certs/ldap.example.com.pem
+#       key: /config/certs/ldap.example.com.key
+#       ca: /config/certs/backend-ca.pem
+#     binds:
+#       "":
+#         mapToDn: "uid=reader,dc=example,dc=com"
+#         mapToSecret: "replace-me"
+#         allowedQueries:
+#           - ["dc=example,dc=com", "subtree", "(objectClass=*)"]
+#       "cn=admin,dc=example,dc=com": {}

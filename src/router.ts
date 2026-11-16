@@ -104,6 +104,9 @@ export class Router {
       serverNames: [],
       strategy: "first",
       backendMode: "inherit",
+      intercept: false,
+      tls: { rejectUnauthorized: true },
+      binds: [],
     };
     const captures: Captures = { sni, groups: [sni] };
     return {

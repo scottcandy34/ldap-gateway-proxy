@@ -11,14 +11,14 @@ Port 389 is StartTLS. The proxy answers the StartTLS request, reads the same SNI
 | | |
 |---|---|
 | Image | `ghcr.io/scottcandy34/ldap-gateway-proxy` |
-| This release | `v0.1.0` |
+| This release | `v0.2.0` |
 | Also tagged | `0.1.0`, `v0.1`, `0.1`, `latest` |
 
 ```bash
-docker pull ghcr.io/scottcandy34/ldap-gateway-proxy:v0.1.0
+docker pull ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.0
 ```
 
-`latest` moves when a newer version is published. `v0.1.0` does not. Pin the version.
+`latest` moves when a newer version is published. `v0.2.0` does not. Pin the version.
 
 The image version is the `version` in [package.json](package.json). Major stays `0` until a breaking change. Bump it before a change you want published:
 
@@ -36,7 +36,7 @@ mkdir -p config
 docker compose up -d
 ```
 
-[docker-compose.yml](docker-compose.yml) already points at `ghcr.io/scottcandy34/ldap-gateway-proxy:v0.1.0`. The first start writes `config/config.yml` if the file is missing. Edit it and recreate the container. An empty `./config` mount is enough. Pulling a new image does not overwrite a config you have edited.
+[docker-compose.yml](docker-compose.yml) already points at `ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.0`. The first start writes `config/config.yml` if the file is missing. Edit it and recreate the container. An empty `./config` mount is enough. Pulling a new image does not overwrite a config you have edited.
 
 Or without compose:
 
@@ -44,7 +44,7 @@ Or without compose:
 docker run -d --name ldap-gateway \
   -p 389:389 -p 636:636 \
   -v "$PWD/config:/config" \
-  ghcr.io/scottcandy34/ldap-gateway-proxy:v0.1.0
+  ghcr.io/scottcandy34/ldap-gateway-proxy:v0.2.0
 ```
 
 Health checks inside the container use `http://127.0.0.1:8081/health`. That port is not published.
@@ -103,7 +103,30 @@ StartTLS on 389:
 ldapsearch -H ldap://ldap.example.com -ZZ -x -b dc=example,dc=com
 ```
 
-`LDAPTLS_REQCERT=demand` works when the backend certificate is publicly trusted for that hostname. The proxy does not present a certificate of its own.
+`LDAPTLS_REQCERT=demand` works when the certificate the proxy (or, for a splice route, the backend) presents is publicly trusted for that hostname.
+
+## Firewall
+
+A route with a `binds` map terminates TLS and applies the same kind of limits as [kanidm/ldap-proxy](https://github.com/kanidm/ldap-proxy): which DNs may bind, which searches each DN may run, an anonymous bind rewritten to a service account, an in-memory search cache, and a maximum LDAP message size. The full table is in [docs/config.md](docs/config.md).
+
+```yaml
+routes:
+  - name: main
+    host: ldap.example.com
+    backend: "10.0.0.90:636"
+    tls:
+      cert: /config/certs/ldap.example.com.pem
+      key: /config/certs/ldap.example.com.key
+    binds:
+      "cn=admin,dc=example,dc=com": {}
+      "":
+        mapToDn: "uid=reader,dc=example,dc=com"
+        mapToSecret: "replace-me"
+        allowedQueries:
+          - ["dc=example,dc=com", "subtree", "(objectClass=*)"]
+```
+
+Without `binds`, nothing changes: the connection is spliced and the certificate stays on OpenLDAP.
 
 ## Build the image yourself
 

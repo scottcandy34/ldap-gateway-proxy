@@ -1,6 +1,6 @@
 {
   "name": "ldap-gateway-proxy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "SNI reverse proxy for LDAP and LDAPS. One port, many hostnames, OpenLDAP backends.",
   "type": "module",
